@@ -8,6 +8,7 @@ import org.slf4j.LoggerFactory;
 import java.io.IOException;
 import java.io.OutputStream;
 import java.net.InetSocketAddress;
+import java.util.List;
 import java.util.Optional;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -49,20 +50,68 @@ public class Application {
         }
         //endregion
 
-        //region Manage GET /tasks/{id}
-        Matcher m = ID_PATH.matcher(path);
-        if ("GET".equals(method) && m.matches()) {
-            int id = Integer.parseInt(m.group(1));
-            Optional<Task> task = dao.findById(id);
+        //region Manage GET /tasks
+        if ("GET".equals(method) && "/tasks".equals(path)) {
+            String query = exchange.getRequestURI().getQuery();
+            // Analyse sommaire du query param pour "todo-only=true"
+            boolean todoOnly = query != null && query.contains("todo-only=true");
 
-            if (task.isPresent()) {
-                sendResponse(exchange, 200, JsonUtils.serialize(task.get()));
+            List<Task> tasks = dao.findAll(todoOnly);
+
+            if (tasks.isEmpty()) {
+                sendResponse(exchange, 204, null);
             } else {
-                sendResponse(exchange, 404, null);
+                sendResponse(exchange, 200, JsonUtils.serialize(tasks));
             }
             return;
         }
         //endregion
+
+        Matcher m = ID_PATH.matcher(path);
+        if (m.matches()) {
+            int id = Integer.parseInt(m.group(1));
+
+            //region Manage GET /tasks/{id}
+            if ("GET".equals(method)) {
+                Optional<Task> task = dao.findById(id);
+
+                if (task.isPresent()) {
+                    sendResponse(exchange, 200, JsonUtils.serialize(task.get()));
+                } else {
+                    sendResponse(exchange, 404, null);
+                }
+                return;
+            }
+            //endregion
+
+            //region Manage DELETE /tasks/{id}
+            if ("DELETE".equals(method)) {
+                if (dao.deleteById(id)) {
+                    sendResponse(exchange, 204, null);
+                } else {
+                    sendResponse(exchange, 404, null);
+                }
+                return;
+            }
+            //endregion
+
+            //region Manage PUT /tasks/{id}
+            if ("PUT".equals(method)) {
+                if (!dao.existsById(id)) {
+                    sendResponse(exchange, 404, null);
+                    return;
+                }
+
+                Task input = JsonUtils.deserialize(new String(exchange.getRequestBody().readAllBytes(), UTF_8), Task.class);
+                // On force l'ID de l'URL pour éviter toute incohérence avec le corps de la requête
+                Task updatedTask = new Task(id, input.title(), input.description(), input.done());
+
+                dao.save(updatedTask);
+                sendResponse(exchange, 204, null);
+                return;
+            }
+            //endregion
+        }
 
         // Sinon → 404
         sendResponse(exchange, 404, null);
@@ -77,7 +126,7 @@ public class Application {
                 os.write(bytes);
             }
         } else {
-            exchange.sendResponseHeaders(status, 0);
+            exchange.sendResponseHeaders(status, -1); // Utiliser -1 au lieu de 0 pour aucun contenu
             exchange.close();
         }
     }
